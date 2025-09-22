@@ -254,7 +254,7 @@ class TableauDashboardAgent:
                 # 6. Click the now-enabled "Apply" button INSIDE the panel
                 await panel_locator.locator('button:has-text("Apply")').click()
                 print("  -> Clicked 'Apply' in dropdown.")
-
+                
                 # 7. Wait for the panel to disappear
                 await panel_locator.wait_for(state="hidden", timeout=5000)
                 print("  -> Filter panel is closed.")
@@ -522,7 +522,11 @@ class TableauDashboardAgent:
                 "question": question,
                 "url": page.url
             }
-    
+
+            # Adding a long pause so we can visually inspect the filtered dashboard.
+            print("Pausing for 10 seconds to observe the results...")
+            await page.wait_for_timeout(10000) # 10-second pause
+            
             await browser.close()
             await playwright.stop()
         
