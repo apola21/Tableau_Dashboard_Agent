@@ -214,13 +214,18 @@ class TableauDashboardAgent:
                 filters_to_apply["Reporting College"] = "Lehman"
 
             for label, value_to_select in filters_to_apply.items():
-                print(f"Applying filter '{label}' with value '{value_to_select}'...")
-            
-                # 1. Find the filter's title element
+                print(f"\n=== Applying Filter: {label} = {value_to_select} ===")
+                
+                # 1. Find the filter's title element - handle strict mode violations
                 label_locator = page.locator(f'h3.FilterTitle:has-text("{label}")')
-                if not await label_locator.count() > 0:
+                count = await label_locator.count()
+                
+                if count == 0:
                     print(f"  -> Could not find filter with label '{label}'.")
                     continue
+                elif count > 1:
+                    print(f"  -> Found {count} filters with label '{label}', using first one")
+                    label_locator = label_locator.first
             
                 # 2. Find and click the dropdown arrow
                 arrow_locator = label_locator.locator('xpath=./ancestor::div[contains(@class, "Title")]/following-sibling::div//span[@class="tabComboBoxButton"]')
@@ -232,7 +237,6 @@ class TableauDashboardAgent:
                 print("  -> Filter panel is open.")
             
                 # 4. Deselect the "(All)" option
-                # This more precise locator finds the input directly associated with the "(All)" text
                 all_checkbox = panel_locator.locator('div[role="checkbox"]:has(a[title="(All)"]) input')
                 await all_checkbox.click()
                 print("  -> Deselected '(All)'.")
@@ -247,17 +251,64 @@ class TableauDashboardAgent:
             
                 # --- Add another pause before looking for the Apply button ---
                 await page.wait_for_timeout(500)
-                apply_button = panel_locator.locator('button:has-text("Apply")')
-                print("  -> Waiting for Apply button to become enabled...")
-                await apply_button.wait_for(state="enabled", timeout=5000)
-
-                # 6. Click the now-enabled "Apply" button INSIDE the panel
-                await panel_locator.locator('button:has-text("Apply")').click()
-                print("  -> Clicked 'Apply' in dropdown.")
+                
+                # Try multiple selectors for the Apply button - based on actual HTML structure
+                apply_button = None
+                apply_selectors = [
+                    'div.CFApplyButtonContainer button.apply',  # Most specific - exact structure
+                    'button.tab-button.apply',                  # Button with apply class
+                    'button[title="Apply"]',                    # Button with title attribute
+                    'button:has-text("Apply")',                 # Button containing Apply text
+                    'span.label:has-text("Apply")',             # Span with label class
+                    'button[class*="apply"]'                     # Any button with apply in class
+                ]
+                
+                print("  -> Looking for Apply button...")
+                
+                # Try to find Apply button - first in panel, then page level
+                for selector in apply_selectors:
+                    try:
+                        # Try within the panel first
+                        apply_button = panel_locator.locator(selector)
+                        count = await apply_button.count()
+                        if count > 0:
+                            print(f"  -> Found Apply button in panel with selector: {selector}")
+                            break
+                        
+                        # If not found in panel, try at page level
+                        apply_button = page.locator(selector)
+                        count = await apply_button.count()
+                        if count > 0:
+                            print(f"  -> Found Apply button on page with selector: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if apply_button and await apply_button.count() > 0:
+                    # Try to click the Apply button
+                    try:
+                        await apply_button.click()
+                        print("  -> Clicked 'Apply' in dropdown.")
+                    except Exception as e:
+                        print(f"  -> Regular click failed: {e}, trying dispatch_event")
+                        try:
+                            await apply_button.dispatch_event('click')
+                            print("  -> Clicked 'Apply' with dispatch_event.")
+                        except Exception as e2:
+                            print(f"  -> Both click methods failed: {e2}")
+                            continue
+                else:
+                    print("  -> ERROR: Could not find Apply button with any selector")
+                    continue
                 
                 # 7. Wait for the panel to disappear
                 await panel_locator.wait_for(state="hidden", timeout=5000)
                 print("  -> Filter panel is closed.")
+                
+                # 8. Wait for dashboard to reload before applying next filter
+                print("  -> Waiting for dashboard to reload...")
+                await self.wait_for_dashboard_reload(page)
+                print("  -> Dashboard reload completed.")
     
         except Exception as e:
             print(f"Error applying filters: {e}")
@@ -512,8 +563,6 @@ class TableauDashboardAgent:
         
             await self.discover_all_filters(page)
             await self.apply_filters_based_on_question(page, question)
-            await self.click_apply_button(page)
-            await self.wait_for_dashboard_reload(page)
             targeted_data = await self.extract_targeted_data(page, question)
     
             result = {
