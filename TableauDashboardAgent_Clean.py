@@ -207,11 +207,19 @@ class TableauDashboardAgent:
         """
         try:
             # Simple NLU to get filter values from the question
+            print(f"Analyzing question: '{question}'")
             filters_to_apply = {}
             if "bachelor" in question.lower():
                 filters_to_apply["Award Level"] = "Bachelor's"
+                print("Found 'bachelor' - will apply Award Level filter")
             if "lehman" in question.lower():
                 filters_to_apply["Reporting College"] = "Lehman"
+                print("Found 'lehman' - will apply Reporting College filter")
+            
+            print(f"Filters to apply: {filters_to_apply}")
+            if not filters_to_apply:
+                print("No filters found in question!")
+                return
 
             for label, value_to_select in filters_to_apply.items():
                 print(f"\n=== Applying Filter: {label} = {value_to_select} ===")
@@ -222,7 +230,7 @@ class TableauDashboardAgent:
                 
                 if count == 0:
                     print(f"  -> Could not find filter with label '{label}'.")
-                    continue
+                    return False
                 elif count > 1:
                     print(f"  -> Found {count} filters with label '{label}', using first one")
                     label_locator = label_locator.first
@@ -296,14 +304,19 @@ class TableauDashboardAgent:
                             print("  -> Clicked 'Apply' with dispatch_event.")
                         except Exception as e2:
                             print(f"  -> Both click methods failed: {e2}")
-                            continue
                 else:
                     print("  -> ERROR: Could not find Apply button with any selector")
-                    continue
                 
-                # 7. Wait for the panel to disappear
-                await panel_locator.wait_for(state="hidden", timeout=5000)
-                print("  -> Filter panel is closed.")
+                # 7. Wait for the panel to disappear (with fallback)
+                try:
+                    await panel_locator.wait_for(state="hidden", timeout=5000)
+                    print("  -> Filter panel is closed.")
+                except Exception as e:
+                    print(f"  -> Panel didn't close automatically: {e}")
+                    print("  -> Proceeding anyway...")
+                    print("  -> Trying to close panel manually...")
+                    await page.keyboard.press('Escape')
+                    await page.wait_for_timeout(1000)
                 
                 # 8. Wait for dashboard to reload before applying next filter
                 print("  -> Waiting for dashboard to reload...")
@@ -312,6 +325,7 @@ class TableauDashboardAgent:
     
         except Exception as e:
             print(f"Error applying filters: {e}")
+            print("Continuing with next steps...")
 
 
 
@@ -547,7 +561,12 @@ class TableauDashboardAgent:
             page = await browser.new_page(viewport={"width": 1920, "height": 1080})
             page.set_default_timeout(60000)
         
+            print(f"🌍 Navigating to: {self.dashboard_url}")
             await page.goto(self.dashboard_url, wait_until="load", timeout=60000)
+            print("✅ Page loaded successfully")
+            
+            print("⏸️ Pausing for 3 seconds so we can see the browser...")
+            await page.wait_for_timeout(3000)
     
             # 1. Wait for the main container to be ready.
             print("Waiting for Tableau container to be ready...")
@@ -573,8 +592,8 @@ class TableauDashboardAgent:
             }
 
             # Adding a long pause so we can visually inspect the filtered dashboard.
-            print("Pausing for 10 seconds to observe the results...")
-            await page.wait_for_timeout(10000) # 10-second pause
+            print("Pausing for 5 seconds to observe the results...")
+            await page.wait_for_timeout(5000) # 5-second pause
             
             await browser.close()
             await playwright.stop()
