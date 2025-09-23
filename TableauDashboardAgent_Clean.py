@@ -208,13 +208,53 @@ class TableauDashboardAgent:
         try:
             # Simple NLU to get filter values from the question
             print(f"Analyzing question: '{question}'")
+            entities = self.extract_entities_from_question(question.lower())
+            print(f" Extracted Entities: {entities}")
+            
+            #so lets map entities to filters
             filters_to_apply = {}
-            if "bachelor" in question.lower():
-                filters_to_apply["Award Level"] = "Bachelor's"
-                print("Found 'bachelor' - will apply Award Level filter")
-            if "lehman" in question.lower():
-                filters_to_apply["Reporting College"] = "Lehman"
-                print("Found 'lehman' - will apply Reporting College filter")
+            if entities.get("degree"):
+                filters_to_apply["Award Level"] = entities['degree']
+                print(f"Found degree '{entities['degree']}' - will apply Award Level filter")
+            if entities.get('award_name'):
+                filters_to_apply["Award Name"] = entities['award_name']
+                print(f"Found award '{entities['award_name']}' - will apply Award Name filter")
+            if entities.get('location'):
+                filters_to_apply["Reporting College"] = entities['location']
+                print(f"Found college name '{entities['location']}' - will apply Reporting College filter")
+            if entities.get('college type'):
+                filters_to_apply["Reporting College Type"] = entities['college name']
+                print(f"Found college name '{entities['college name']}' - will apply Reporting College filter")
+            if entities.get('program'):
+                filters_to_apply["Program Name"] = entities['program']
+                print(f"Found program '{entities['program']}' - will apply Program Name filter")
+            if entities.get('category'):
+                filters_to_apply["STEM Category"] = entities['category']
+                print(f"Found category '{entities['category']}' - will apply STEM Category filter")
+            if entities.get('enrolled_college'):
+                filters_to_apply["Enrolled College"] = entities['enrolled_college']
+                print(f"Found enrolled college '{entities['enrolled_college']}' - will apply Enrolled College filter")
+            if entities.get('college_type'):
+                filters_to_apply["Reporting College Type"] = entities['college_type']
+                print(f"Found college type '{entities['college_type']}' - will apply Reporting College Type filter")
+            if entities.get('enrolled_college_type'):
+                filters_to_apply["Enrolled College Type"] = entities['enrolled_college_type']
+                print(f"Found enrolled college type '{entities['enrolled_college_type']}' - will apply Enrolled College Type filter")
+            if entities.get('academic_plan'):
+                filters_to_apply["Academic Plan"] = entities['academic_plan']
+                print(f"Found academic plan '{entities['academic_plan']}' - will apply Academic Plan filter")
+            if entities.get('cip_2digit'):
+                filters_to_apply["CIP 2-Digit Title/Code"] = entities['cip_2digit']
+                print(f"Found CIP 2-digit '{entities['cip_2digit']}' - will apply CIP 2-Digit Title/Code filter")
+            if entities.get('cip_4digit'):
+                filters_to_apply["CIP 4-Digit Title/Code"] = entities['cip_4digit']
+                print(f"Found CIP 4-digit '{entities['cip_4digit']}' - will apply CIP 4-Digit Title/Code filter")
+            if entities.get('cip_6digit'):
+                filters_to_apply["CIP 6-Digit Title/Code"] = entities['cip_6digit']
+                print(f"Found CIP 6-digit '{entities['cip_6digit']}' - will apply CIP 6-Digit Title/Code filter")
+            if entities.get('sevis_eligible'):
+                filters_to_apply["Extended SEVIS-eligible Prgm"] = entities['sevis_eligible']
+                print(f"Found SEVIS eligibility '{entities['sevis_eligible']}' - will apply Extended SEVIS-eligible Prgm filter")
             
             print(f"Filters to apply: {filters_to_apply}")
             if not filters_to_apply:
@@ -792,15 +832,118 @@ class TableauDashboardAgent:
             if 'category' in entities:
                 break
         
-        # Extract program/subject entities (any capitalized words that might be programs)
-        program_words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', question_lower.title())
+                # Extract STEM category entities (specific academic fields)
+        stem_categories = {
+            'computer science': ['computer science', 'cs', 'computing'],
+            'biology': ['biology', 'biological'],
+            'chemistry': ['chemistry', 'chemical'],
+            'engineering': ['engineering', 'engineer'],
+            'mathematics': ['mathematics', 'math', 'mathematical'],
+            'physics': ['physics', 'physical'],
+            'statistics': ['statistics', 'statistical'],
+            'technology': ['technology', 'tech'],
+            'earth science': ['earth science', 'environmental', 'marine science'],
+            'general science': ['general science', 'science']
+        }
         
-        # Filter out common words and keep potential program names
-        common_words = {'The', 'And', 'Or', 'But', 'In', 'On', 'At', 'To', 'For', 'Of', 'With', 'By', 'From', 'How', 'What', 'When', 'Where', 'Why', 'Which', 'Who'}
-        potential_programs = [word for word in program_words if word not in common_words and len(word) > 3]
+        for category, keywords in stem_categories.items():
+            for keyword in keywords:
+                if keyword in question_lower:
+                    entities['category'] = category.title()
+                    break
+            if 'category' in entities:
+                break
         
-        if potential_programs:
-            entities['program'] = potential_programs[0]
+        # Extract specific program names (only if not already categorized as STEM)
+        if 'category' not in entities:
+            # Look for specific program names like "Business Administration", "Nursing", etc.
+            specific_programs = ['business administration', 'nursing', 'psychology', 'education', 'social work', 'criminal justice']
+            for program in specific_programs:
+                if program in question_lower:
+                    entities['program'] = program.title()
+                    break
+        # Extract additional entity types for all 15 filters
+        
+        # Extract award name entities
+        award_patterns = ['bachelor of arts', 'bachelor of science', 'master of arts', 'master of science', 'associate of arts', 'associate of science']
+        for award in award_patterns:
+            if award in question_lower:
+                entities['award_name'] = award.title()
+                break
+        
+        # Extract delivery format entities
+        delivery_patterns = {
+            'online': ['online', 'distance', 'remote'],
+            'hybrid': ['hybrid', 'blended'],
+            'in-person': ['in-person', 'on-campus', 'campus', 'face-to-face']
+        }
+        for format_type, keywords in delivery_patterns.items():
+            for keyword in keywords:
+                if keyword in question_lower:
+                    entities['delivery_format'] = format_type.title()
+                    break
+            if 'delivery_format' in entities:
+                break
+        
+        # Extract enrolled college entities (separate from reporting college)
+        if 'enrolled' in question_lower:
+            # Look for college names after "enrolled"
+            enrolled_pattern = r'enrolled.*?(?:at|in)\s+([a-z\s]+(?:college|university))'
+            match = re.search(enrolled_pattern, question_lower)
+            if match:
+                entities['enrolled_college'] = match.group(1).title()
+        
+        # Extract college type entities
+        college_type_patterns = {
+            'community': ['community college', 'cc'],
+            'senior': ['senior college', 'four-year'],
+            'graduate': ['graduate school', 'graduate center']
+        }
+        for type_name, keywords in college_type_patterns.items():
+            for keyword in keywords:
+                if keyword in question_lower:
+                    entities['college_type'] = type_name.title()
+                    break
+            if 'college_type' in entities:
+                break
+        
+        # Extract academic plan entities
+        academic_patterns = ['full-time', 'part-time', 'accelerated', 'evening', 'weekend']
+        for plan in academic_patterns:
+            if plan in question_lower:
+                entities['academic_plan'] = plan.title()
+                break
+        
+        # Extract CIP code entities
+        cip_patterns = [
+            (r'\b(\d{2})\b', 'cip_2digit'),
+            (r'\b(\d{4})\b', 'cip_4digit'), 
+            (r'\b(\d{6})\b', 'cip_6digit')
+        ]
+        for pattern, entity_key in cip_patterns:
+            matches = re.findall(pattern, question_lower)
+            if matches:
+                entities[entity_key] = matches[0]
+                break
+        
+        # Extract SEVIS eligibility entities
+        if any(word in question_lower for word in ['sevis', 'international', 'f-1', 'visa']):
+            entities['sevis_eligible'] = 'Yes'
+        
+        # Extract education credentials entities
+        credential_patterns = {
+            'teacher credentials': ['teacher credentials', 'teaching credentials'],
+            'administration credentials': ['administration credentials', 'admin credentials'],
+            'counseling credentials': ['counseling credentials', 'pps credentials'],
+            'teacher aide': ['teacher aide', 'aide credentials']
+        }
+        for cred_type, keywords in credential_patterns.items():
+            for keyword in keywords:
+                if keyword in question_lower:
+                    entities['education_credentials'] = cred_type.title()
+                    break
+            if 'education_credentials' in entities:
+                break
         
         # Extract time entities
         time_patterns = [r'\b(20\d{2})\b', r'\b(current|recent|latest)\b', r'\b(last\s+year|this\s+year)\b']
