@@ -3,6 +3,8 @@ import json
 import logging
 import os
 import sys
+import base64
+import time
 from playwright.async_api import async_playwright
 from playwright.async_api import Page
 from oci.addons.adk import AgentClient, Agent, tool
@@ -410,186 +412,39 @@ class TableauDashboardAgent:
             #for data extraction to still succeed.
             print(f"Warning: A timeout occurred during the reload wait, but the agent will proceed. Error: {e}")
     
-    async def extract_targeted_data(self, page, question):
-        """Extract only the data needed to answer the specific question"""
+    async def capture_dashboard_screenshot(self, page, question):
+        """Capture full-page screenshot after filters are applied for VLM analysis"""
         try:
-            question_lower = question.lower()
+            # Wait for dashboard to fully load after filters
+            print("📸 Waiting for dashboard to stabilize before screenshot...")
+            await page.wait_for_timeout(5000)
             
-            # Determine what type of data to extract based on question
-            if any(word in question_lower for word in ['how many', 'count', 'number']):
-                # Extract KPI numbers and counts
-                return await self.extract_kpi_data(page)
+            # Ensure screenshots directory exists
+            os.makedirs("screenshots", exist_ok=True)
             
-            elif any(word in question_lower for word in ['show', 'list', 'what', 'which']):
-                # Extract list data
-                return await self.extract_list_data(page)
+            # Generate unique filename with timestamp
+            timestamp = int(time.time())
+            screenshot_path = f"screenshots/dashboard_{timestamp}.png"
             
-            elif any(word in question_lower for word in ['compare', 'difference']):
-                # Extract comparison data
-                return await self.extract_comparison_data(page)
+            # Take full page screenshot
+            print(f"📸 Capturing screenshot: {screenshot_path}")
+            await page.screenshot(path=screenshot_path, full_page=True)
             
-            else:
-                # Extract general summary data
-                return await self.extract_summary_data(page)
-                
-        except Exception as e:
-            print(f"Error extracting targeted data: {e}")
-            return {"error": str(e)}
-
-    async def extract_kpi_data(self, page):
-        """Extract KPI numbers and counts specifically"""
-        try:
-            kpi_data = await page.evaluate("""
-                () => {
-                    const kpis = [];
-                    
-                    // Look for large numbers that could be KPIs
-                    const elements = document.querySelectorAll('div, span, td, th, h1, h2, h3');
-                    elements.forEach(el => {
-                        const text = el.textContent || '';
-                        const numbers = text.match(/\\b\\d{1,4}\\b/g);
-                        
-                        if (numbers && numbers.length > 0) {
-                            const num = parseInt(numbers[0]);
-                            if (num >= 10 && num <= 9999) { // Reasonable KPI range
-                                kpis.push({
-                                    value: num,
-                                    context: text.trim(),
-                                    element: el.tagName
-                                });
-                            }
-                        }
-                    });
-                    
-                    // Look for specific patterns like "College: 123"
-                    const patternElements = document.querySelectorAll('div, span, td, th');
-                    patternElements.forEach(el => {
-                        const text = el.textContent || '';
-                        const match = text.match(/([A-Za-z\\s]+):\\s*(\\d+)/);
-                        if (match) {
-                            kpis.push({
-                                label: match[1].trim(),
-                                value: parseInt(match[2]),
-                                context: text.trim(),
-                                type: 'labeled_count'
-                            });
-                        }
-                    });
-                    
-                    return kpis;
-                }
-            """)
+            # Convert to base64 for VLM processing
+            with open(screenshot_path, "rb") as image_file:
+                image_base64 = base64.b64encode(image_file.read()).decode('utf-8')
             
-            return {"kpi_data": kpi_data, "type": "kpi"}
+            print(f"Screenshot captured successfully: {screenshot_path}")
+            print(f"Image size: {len(image_base64)} characters (base64)")
+            
+            return {
+                "screenshot_path": screenshot_path,
+                "image_base64": image_base64,
+                "timestamp": timestamp
+            }
             
         except Exception as e:
-            print(f"Error extracting KPI data: {e}")
-            return {"error": str(e)}
-
-    async def extract_list_data(self, page):
-        """Extract list/table data"""
-        try:
-            list_data = await page.evaluate("""
-                () => {
-                    const lists = [];
-                    
-                    // Look for table rows
-                    const rows = document.querySelectorAll('tr, div[class*="row"]');
-                    rows.forEach(row => {
-                        const cells = row.querySelectorAll('td, th, div[class*="cell"]');
-                        if (cells.length > 1) {
-                            const rowData = Array.from(cells).map(cell => cell.textContent?.trim()).filter(text => text);
-                            if (rowData.length > 0) {
-                                lists.push({
-                                    type: 'table_row',
-                                    data: rowData
-                                });
-                            }
-                        }
-                    });
-                    
-                    // Look for list items
-                    const listItems = document.querySelectorAll('li, div[class*="item"]');
-                    listItems.forEach(item => {
-                        const text = item.textContent?.trim();
-                        if (text && text.length > 3 && text.length < 200) {
-                            lists.push({
-                                type: 'list_item',
-                                data: text
-                            });
-                        }
-                    });
-                    
-                    return lists;
-                }
-            """)
-            
-            return {"list_data": list_data, "type": "list"}
-            
-        except Exception as e:
-            print(f"Error extracting list data: {e}")
-            return {"error": str(e)}
-
-    async def extract_comparison_data(self, page):
-        """Extract data for comparisons"""
-        try:
-            comparison_data = await page.evaluate("""
-                () => {
-                    const comparisons = [];
-                    
-                    // Look for data that could be compared (multiple values)
-                    const elements = document.querySelectorAll('div, span, td, th');
-                    elements.forEach(el => {
-                        const text = el.textContent || '';
-                        const numbers = text.match(/\\b\\d+\\b/g);
-                        
-                        if (numbers && numbers.length >= 2) {
-                            comparisons.push({
-                                context: text.trim(),
-                                values: numbers.map(n => parseInt(n)),
-                                element: el.tagName
-                            });
-                        }
-                    });
-                    
-                    return comparisons;
-                }
-            """)
-            
-            return {"comparison_data": comparison_data, "type": "comparison"}
-            
-        except Exception as e:
-            print(f"Error extracting comparison data: {e}")
-            return {"error": str(e)}
-
-    async def extract_summary_data(self, page):
-        """Extract general summary data"""
-        try:
-            summary_data = await page.evaluate("""
-                () => {
-                    const summary = [];
-                    
-                    // Look for key text elements
-                    const elements = document.querySelectorAll('h1, h2, h3, div[class*="title"], div[class*="summary"]');
-                    elements.forEach(el => {
-                        const text = el.textContent?.trim();
-                        if (text && text.length > 5 && text.length < 300) {
-                            summary.push({
-                                type: 'heading',
-                                text: text,
-                                element: el.tagName
-                            });
-                        }
-                    });
-                    
-                    return summary;
-                }
-            """)
-            
-            return {"summary_data": summary_data, "type": "summary"}
-            
-        except Exception as e:
-            print(f"Error extracting summary data: {e}")
+            print(f"Error capturing screenshot: {e}")
             return {"error": str(e)}
 
     async def analyze_dashboard(self, question):
@@ -622,11 +477,13 @@ class TableauDashboardAgent:
         
             await self.discover_all_filters(page)
             await self.apply_filters_based_on_question(page, question)
-            targeted_data = await self.extract_targeted_data(page, question)
+            
+            # Capture screenshot for VLM analysis
+            screenshot_data = await self.capture_dashboard_screenshot(page, question)
     
             result = {
                 "title": await page.title(),
-                "targeted_data": targeted_data,
+                "screenshot_data": screenshot_data,
                 "question": question,
                 "url": page.url
             }
@@ -644,7 +501,7 @@ class TableauDashboardAgent:
             logging.error(f"Failed to analyze dashboard: {e}")
             return {"error": str(e)}
     def analyze_dashboard_data(self, question, data):
-        """Analyze the extracted data and generate insights"""
+        """Analyze the dashboard data and prepare for VLM processing"""
         try:
             # Handle truncated questions by expanding common patterns
             expanded_question = self.expand_truncated_question(question)
@@ -653,76 +510,43 @@ class TableauDashboardAgent:
             # Extract entities from expanded question
             entities = self.extract_entities_from_question(expanded_question.lower())
             
-            # Parse text content for relevant information
-            text_content = data.get("text_content", "")
-            filters = data.get("filters", [])
-            charts = data.get("charts", [])
-            program_counts = data.get("program_counts", [])
+            # Get screenshot data for VLM analysis
+            screenshot_data = data.get("screenshot_data", {})
             
-            # Look for count/number questions
+            # Prepare context for VLM
+            applied_filters = []
+            if entities.get('degree'):
+                applied_filters.append(f"Award Level: {entities['degree']}")
+            if entities.get('location'):
+                applied_filters.append(f"Reporting College: {entities['location']}")
+            if entities.get('category'):
+                applied_filters.append(f"STEM Category: {entities['category']}")
+            if entities.get('program'):
+                applied_filters.append(f"Program Name: {entities['program']}")
+            if entities.get('delivery_format'):
+                applied_filters.append(f"Program Delivery Format: {entities['delivery_format']}")
+            
+            filter_context = ", ".join(applied_filters) if applied_filters else "No filters applied"
+            
+            # Prepare response for VLM analysis
             response_parts = []
             
-            if "how many" in expanded_question.lower() or "count" in expanded_question.lower():
-                # First try to find specific college counts
-                entities = self.extract_entities_from_question(expanded_question.lower())
-                college_name = entities.get('location', '')
-                
-                if college_name and program_counts:
-                    # Look for the specific college in program counts
-                    for count_data in program_counts:
-                        if college_name.lower() in count_data['college'].lower():
-                            response_parts.append(f"🔢 **Answer: {count_data['count']} programs at {college_name}**")
-                            break
-                    else:
-                        # If specific college not found, show all counts
-                        if program_counts:
-                            counts_text = ", ".join([f"{pc['college']}: {pc['count']}" for pc in program_counts[:5]])
-                            response_parts.append(f"🔢 **Program counts:** {counts_text}")
-                        else:
-                            response_parts.append("🔢 No specific count found in the data")
-                else:
-                    # Fallback to extracting numbers from text content
-                    import re
-                    numbers = re.findall(r'\d+', text_content)
-                    large_numbers = [n for n in numbers if int(n) >= 10]
-                    
-                    if large_numbers:
-                        main_answer = max(large_numbers, key=int)
-                        response_parts.append(f"🔢 **Answer: {main_answer}**")
-                    else:
-                        response_parts.append("🔢 No specific count found in the data")
+            # Add context about applied filters
+            response_parts.append(f"📊 **Applied Filters:** {filter_context}")
             
-            # Add filter information
-            if filters:
-                filter_names = [f["text"][:50] for f in filters[:5]]  # Limit length
-                response_parts.append(f"🔍 **Available filters:** {', '.join(filter_names)}")
+            # Add screenshot information
+            if screenshot_data and not screenshot_data.get("error"):
+                response_parts.append(f"📸 **Screenshot captured:** {screenshot_data.get('screenshot_path', 'Unknown')}")
+                response_parts.append("🤖 **Ready for VLM analysis** - Screenshot will be processed by OCI Vision")
+            else:
+                response_parts.append("❌ **Screenshot failed** - Will use fallback text analysis")
             
-            # Add chart information
-            if charts:
-                chart_info = [c["text"][:100] for c in charts[:3]]  # Limit length
-                response_parts.append(f"📊 **Chart data:** {', '.join(chart_info)}")
+            # Add detected entities
+            if entities:
+                entity_summary = ", ".join([f"{k}: {v}" for k, v in entities.items() if v])
+                response_parts.append(f"🔍 **Detected entities:** {entity_summary}")
             
-            # Add entity-specific information
-            for entity_type, entity_value in entities.items():
-                if entity_value:
-                    # Look for data containing this entity
-                    relevant_data = []
-                    for chart in charts:
-                        if entity_value.lower() in chart["text"].lower():
-                            relevant_data.append(chart["text"][:100])
-                    
-                    if relevant_data:
-                        response_parts.append(f"🎯 **{entity_value} data:** {', '.join(relevant_data[:2])}")
-            
-            # Add general text insights
-            if text_content:
-                # Extract key phrases
-                lines = [line.strip() for line in text_content.split('\n') if line.strip()]
-                key_lines = [line for line in lines if len(line) > 10 and len(line) < 200][:5]
-                if key_lines:
-                    response_parts.append(f"📋 **Dashboard content:** {', '.join(key_lines)}")
-            
-            return "\n".join(response_parts) if response_parts else "Dashboard analysis completed successfully."
+            return "\n\n".join(response_parts)
             
         except Exception as e:
             logging.error(f"Failed to analyze dashboard data: {e}")

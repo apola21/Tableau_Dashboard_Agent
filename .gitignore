@@ -170,3 +170,10 @@ logs/
 # Temporary files
 *.tmp
 *.temp
+
+# Screenshots and generated images
+screenshots/
+*.png
+*.jpg
+*.jpeg
+*.gif

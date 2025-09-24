@@ -1,6 +1,10 @@
 # Oracle Cloud ADK
 oci[adk]
 
+oci>=2.100.0
+
+
+
 # Web Automation
 playwright>=1.40.0
 
