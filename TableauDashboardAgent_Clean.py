@@ -5,7 +5,9 @@ import os
 import sys
 import base64
 import time
+import openai
 import oci
+from openai import OpenAI
 from oci.ai_vision import AIServiceVisionClient
 from oci.ai_vision.models import AnalyzeImageDetails, ImageClassificationFeature, ImageTextDetectionFeature, ImageObjectDetectionFeature, InlineImageDetails
 from playwright.async_api import async_playwright
@@ -467,87 +469,76 @@ class TableauDashboardAgent:
             return None
 
     async def analyze_dashboard_with_vlm(self, screenshot_data, question, applied_filters):
-        """Use OCI Vision to analyze dashboard screenshot"""
+        """Use GPT-4 Vision to analyze dashboard screenshot and answer question directly"""
         try:
             if not screenshot_data or screenshot_data.get("error"):
                 return {"error": "No valid screenshot data available"}
         
-            # Setup Vision client
-            vision_client = self.setup_oci_vision_client()
-            if not vision_client:
-                return {"error": "Failed to setup OCI Vision client"}
+            screenshot_path = screenshot_data.get("screenshot_path")
+            if not screenshot_path:
+                return {"error": "No screenshot path available"}
         
-            # Prepare image data
-            image_base64 = screenshot_data.get("image_base64")
-            if not image_base64:
-                return {"error": "No image data available"}
+            import openai
+            import base64
         
-            # Create analysis request
-            analyze_image_details = AnalyzeImageDetails(
-                image=InlineImageDetails(
-                    source="INLINE",
-                    data=image_base64
-                ),
-                features=[
-                    ImageTextDetectionFeature(),
-                    ImageObjectDetectionFeature()
-                ]
+            # Encode image
+            with open(screenshot_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+        
+            # Set your API key
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY")) # Replace with your actual key
+            # Test API key with a simple call
+            try:
+                test_response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    max_tokens=10
+                )
+                print("✅ API key is working!")
+            except Exception as e:
+                print(f"❌ API key test failed: {e}")
+      
+
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Look at this Tableau dashboard screenshot and answer this question: {question}. Focus on the data, numbers, and specific information visible in the dashboard. Give a direct answer."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{base64_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=300
             )
         
-            # Analyze image
-            print("🤖 Analyzing dashboard with OCI Vision...")
-            response = vision_client.analyze_image(
-                analyze_image_details=analyze_image_details
-            )
+            answer = response.choices[0].message.content
         
-            # Extract results from text detection and object detection
-            analysis_results = []
-            extracted_text = []
-            detected_objects = []
-
-            # Extract text from the dashboard
-            if hasattr(response.data, 'text_detection') and response.data.text_detection:
-                for text_result in response.data.text_detection.words:
-                    extracted_text.append(text_result.text)
-                    analysis_results.append({
-                        "type": "text",
-                        "content": text_result.text,
-                        "confidence": text_result.confidence,
-                        "bounding_box": text_result.bounding_polygon
-                    })
-
-            # Extract objects/charts from the dashboard
-            if hasattr(response.data, 'object_detection') and response.data.object_detection:
-                for obj_result in response.data.object_detection.detected_objects:
-                    detected_objects.append(obj_result.name)
-                    analysis_results.append({
-                        "type": "object",
-                        "name": obj_result.name,
-                        "confidence": obj_result.confidence,
-                        "bounding_box": obj_result.bounding_polygon
-                    })
-            
-
-           
-
-            print(f"VLM analysis completed: {len(analysis_results)} insights found")
-            print(f"Extracted text: {len(extracted_text)} words")
-            print(f"Detected objects: {len(detected_objects)} objects")
+            print(f"✅ GPT-4 Vision analysis completed")
+            print(f"🤖 Answer: {answer}")
         
             return {
-                "analysis_results": analysis_results,
-                "extracted_text": extracted_text,
-                "detected_objects": detected_objects,
+                "answer": answer,
                 "question": question,
+                "applied_filters": applied_filters,
                 "status": "success"
             }
         
-        
         except Exception as e:
-            print(f"Error in VLM analysis: {type(e).__name__}: {str(e)[:200]}...")
-            return {"error": f"{type(e).__name__}: {str(e)[:200]}..."}
+            print(f"Error in GPT-4 Vision analysis: {e}")
+            return {"error": str(e)}
 
-    
+
+
     async def analyze_dashboard(self, question):
         try:
             logging.info("Using Playwright to apply filters and extract data...")
@@ -646,15 +637,14 @@ class TableauDashboardAgent:
                 if vlm_result.get("status") == "success":
                     response_parts.append("**VLM Analysis Results:**")
 
-                    #show extracted text
-                    if vlm_result.get("extracted_text"):
-                        text_sample = vlm_result.get("extracted_text")[:10]
-                        response_parts.append(f"📝 **Dashboard Data:** {', '.join(text_sample)}")
-                    
-                    #show detected objects
-                    if vlm_result.get("detected_objects"):
-                        object_sample = vlm_result.get("detected_objects")[:5]
-                        response_parts.append(f"🎯 **Detected Objects:** {', '.join(object_sample)}")
+                    if vlm_result.get("status") == "success":
+                        response_parts.append("**VLM Analysis Results:**")
+    
+                    # Show the direct answer from GPT-4 Vision
+                    if vlm_result.get("answer"):
+                        response_parts.append(f"🤖 **Answer:** {vlm_result['answer']}")
+                    else:
+                        response_parts.append("❌ **No answer generated**")
                    
                 else:
                     response_parts.append(f"**VLM Analysis Failed:** {vlm_result.get('error', 'Unknown error')}")
