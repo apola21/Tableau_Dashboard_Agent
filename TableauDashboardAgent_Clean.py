@@ -5,6 +5,9 @@ import os
 import sys
 import base64
 import time
+import oci
+from oci.ai_vision import AIServiceVisionClient
+from oci.ai_vision.models import AnalyzeImageDetails, ImageClassificationFeature, ImageTextDetectionFeature, ImageObjectDetectionFeature, InlineImageDetails
 from playwright.async_api import async_playwright
 from playwright.async_api import Page
 from oci.addons.adk import AgentClient, Agent, tool
@@ -445,8 +448,106 @@ class TableauDashboardAgent:
             
         except Exception as e:
             print(f"Error capturing screenshot: {e}")
-            return {"error": str(e)}
+            return {"error": f"Screenshot error: {str(e)[:200]}..."}
+    
+    def setup_oci_vision_client(self):
+        """Setup OCI Vision client for image analysis"""
+        try:
+            # Load OCI configuration
+            config = oci.config.from_file()
+        
+            # Create Vision client
+            vision_client = AIServiceVisionClient(config)
+        
+            print("OCI Vision client initialized successfully")
+            return vision_client
+        
+        except Exception as e:
+            print(f"Error setting up OCI Vision client: {e}")
+            return None
 
+    async def analyze_dashboard_with_vlm(self, screenshot_data, question, applied_filters):
+        """Use OCI Vision to analyze dashboard screenshot"""
+        try:
+            if not screenshot_data or screenshot_data.get("error"):
+                return {"error": "No valid screenshot data available"}
+        
+            # Setup Vision client
+            vision_client = self.setup_oci_vision_client()
+            if not vision_client:
+                return {"error": "Failed to setup OCI Vision client"}
+        
+            # Prepare image data
+            image_base64 = screenshot_data.get("image_base64")
+            if not image_base64:
+                return {"error": "No image data available"}
+        
+            # Create analysis request
+            analyze_image_details = AnalyzeImageDetails(
+                image=InlineImageDetails(
+                    source="INLINE",
+                    data=image_base64
+                ),
+                features=[
+                    ImageTextDetectionFeature(),
+                    ImageObjectDetectionFeature()
+                ]
+            )
+        
+            # Analyze image
+            print("🤖 Analyzing dashboard with OCI Vision...")
+            response = vision_client.analyze_image(
+                analyze_image_details=analyze_image_details
+            )
+        
+            # Extract results from text detection and object detection
+            analysis_results = []
+            extracted_text = []
+            detected_objects = []
+
+            # Extract text from the dashboard
+            if hasattr(response.data, 'text_detection') and response.data.text_detection:
+                for text_result in response.data.text_detection.words:
+                    extracted_text.append(text_result.text)
+                    analysis_results.append({
+                        "type": "text",
+                        "content": text_result.text,
+                        "confidence": text_result.confidence,
+                        "bounding_box": text_result.bounding_polygon
+                    })
+
+            # Extract objects/charts from the dashboard
+            if hasattr(response.data, 'object_detection') and response.data.object_detection:
+                for obj_result in response.data.object_detection.detected_objects:
+                    detected_objects.append(obj_result.name)
+                    analysis_results.append({
+                        "type": "object",
+                        "name": obj_result.name,
+                        "confidence": obj_result.confidence,
+                        "bounding_box": obj_result.bounding_polygon
+                    })
+            
+
+           
+
+            print(f"VLM analysis completed: {len(analysis_results)} insights found")
+            print(f"Extracted text: {len(extracted_text)} words")
+            print(f"Detected objects: {len(detected_objects)} objects")
+        
+            return {
+                "analysis_results": analysis_results,
+                "extracted_text": extracted_text,
+                "detected_objects": detected_objects,
+                "question": question,
+                "status": "success"
+            }
+        
+        
+        except Exception as e:
+            print(f"Error in VLM analysis: {type(e).__name__}: {str(e)[:200]}...")
+            return {"error": f"{type(e).__name__}: {str(e)[:200]}..."}
+
+    
     async def analyze_dashboard(self, question):
         try:
             logging.info("Using Playwright to apply filters and extract data...")
@@ -499,8 +600,9 @@ class TableauDashboardAgent:
         
         except Exception as e:
             logging.error(f"Failed to analyze dashboard: {e}")
-            return {"error": str(e)}
-    def analyze_dashboard_data(self, question, data):
+            return {"error": f"Dashboard analysis error: {str(e)[:200]}..."}
+    
+    async def analyze_dashboard_data(self, question, data):
         """Analyze the dashboard data and prepare for VLM processing"""
         try:
             # Handle truncated questions by expanding common patterns
@@ -536,10 +638,28 @@ class TableauDashboardAgent:
             
             # Add screenshot information
             if screenshot_data and not screenshot_data.get("error"):
-                response_parts.append(f"📸 **Screenshot captured:** {screenshot_data.get('screenshot_path', 'Unknown')}")
-                response_parts.append("🤖 **Ready for VLM analysis** - Screenshot will be processed by OCI Vision")
+                response_parts.append(f"**Screenshot captured:** {screenshot_data.get('screenshot_path', 'Unknown')}")
+    
+                # Call VLM analysis
+                vlm_result = await self.analyze_dashboard_with_vlm(screenshot_data, question, filter_context)
+    
+                if vlm_result.get("status") == "success":
+                    response_parts.append("**VLM Analysis Results:**")
+
+                    #show extracted text
+                    if vlm_result.get("extracted_text"):
+                        text_sample = vlm_result.get("extracted_text")[:10]
+                        response_parts.append(f"📝 **Dashboard Data:** {', '.join(text_sample)}")
+                    
+                    #show detected objects
+                    if vlm_result.get("detected_objects"):
+                        object_sample = vlm_result.get("detected_objects")[:5]
+                        response_parts.append(f"🎯 **Detected Objects:** {', '.join(object_sample)}")
+                   
+                else:
+                    response_parts.append(f"**VLM Analysis Failed:** {vlm_result.get('error', 'Unknown error')}")
             else:
-                response_parts.append("❌ **Screenshot failed** - Will use fallback text analysis")
+                    response_parts.append("**Screenshot failed** - Will use fallback text analysis")
             
             # Add detected entities
             if entities:
@@ -798,7 +918,7 @@ async def analyze_tableau_dashboard(question: str):
             return {"error": data["error"]}
         
         # Analyze the data
-        response = tableau_agent.analyze_dashboard_data(question, data)
+        response = await tableau_agent.analyze_dashboard_data(question, data)
         
         return {
             "question": question,
