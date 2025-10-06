@@ -3,7 +3,7 @@ oci[adk]
 
 oci>=2.100.0
 
-
+streamlit>=1.28.0
 
 # Web Automation
 playwright>=1.40.0
